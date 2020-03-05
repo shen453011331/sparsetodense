@@ -6,12 +6,12 @@ import torch
 import torch.nn.parallel
 import torch.optim
 import torch.utils.data
-from tensorboardX import SummaryWriter
+#from tensorboardX import SummaryWriter
 
-from utils.image_plotter import Plotter
-from utils.general import *
-from utils.tensor import *
-from utils.validation import *
+#from utils.image_plotter import Plotter
+#from utils.general import *
+#from utils.tensor import *
+#from utils.validation import *
 
 from dataloaders.kitti_loader import load_calib, oheight, owidth, input_options, KittiDepth
 from model import DepthCompletionNet
@@ -28,7 +28,7 @@ parser.add_argument('-w',
                     metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs',
-                    default=11,
+                    default=20,
                     type=int,
                     metavar='N',
                     help='number of total epochs to run (default: 11)')
@@ -192,6 +192,7 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
                 # Loss 1: the direct depth supervision from ground truth label
                 # mask=1 indicates that a pixel does not ground truth labels
                 if 'sparse' in args.train_mode:
+                    d_s1 = batch_data['d_s1']
                     depth_loss = depth_criterion(pred, batch_data['d'])
                     mask = (batch_data['d'] < 1e-3).float()
                 elif 'dense' in args.train_mode:
@@ -203,7 +204,8 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
                     # create multi-scale pyramids
                     pred_array = helper.multiscale(pred)
                     rgb_curr_array = helper.multiscale(batch_data['rgb'])
-                    rgb_near_array = helper.multiscale(batch_data['rgb_near'])
+                    rgb_s1_array = helper.multiscale(batch_data['rgb_s1'])
+                    rgb_s2_array = helper.multiscale(batch_data['rgb_s2'])
                     if mask is not None:
                         mask_array = helper.multiscale(mask)
                     num_scales = len(pred_array)
@@ -212,7 +214,8 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
                     for scale in range(len(pred_array)):
                         pred_ = pred_array[scale]
                         rgb_curr_ = rgb_curr_array[scale]
-                        rgb_near_ = rgb_near_array[scale]
+                        rgb_s1_ = rgb_s1_array[scale]
+                        rgb_s2_ = rgb_s2_array[scale]
                         mask_ = None
                         if mask is not None:
                             mask_ = mask_array[scale]
@@ -222,11 +225,16 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
                         intrinsics_ = kitti_intrinsics.scale(height_, width_)
 
                         # inverse warp from a nearby frame to the current frame
-                        warped_ = homography_from(rgb_near_, pred_,
-                                                  batch_data['r_mat'],
-                                                  batch_data['t_vec'], intrinsics_)
-                        photometric_loss += photometric_criterion(
-                            rgb_curr_, warped_, mask_) * (2**(scale - num_scales))
+                        warped_s1_ = homography_from(rgb_s1_, pred_,
+                                                  batch_data['r_mat_1'],
+                                                  batch_data['t_vec_1'], intrinsics_)
+                        warped_s2_ = homography_from(rgb_s2_, pred_,
+                                                  batch_data['r_mat_2'],
+                                                  batch_data['t_vec_2'], intrinsics_)
+
+                        photometric_loss += (photometric_criterion(
+                            rgb_curr_, warped_s1_, mask_) + photometric_criterion(
+                            rgb_curr_, warped_s2_, mask_))/2 * (2**(scale - num_scales))
 
                 # Loss 3: the depth smoothness loss
                 smooth_loss = smoothness_criterion(pred) if args.w2 > 0 else 0
@@ -299,7 +307,7 @@ def main():
                   end='')
             checkpoint = torch.load(args.resume, map_location=device)
             args.start_epoch = checkpoint['epoch']
-            args.start_iter = 0  #checkpoint['iter']
+            args.start_iter = checkpoint['iter']
 
             args.data_folder = args_new.data_folder
             args.val = args_new.val
@@ -358,11 +366,14 @@ def main():
         return
 
     # main loop
-    logdir = os.path.join(args.savemodel, args.model)
-    train_writer = SummaryWriter(logdir)
+ #   logdir = os.path.join(args.savemodel, args.model)
+ #   train_writer = SummaryWriter(logdir)
 
-    image_writer = Plotter(train_writer)
-    args.train_writer = train_writer
+#    image_writer = Plotter(train_writer)
+#    args.train_writer = train_writer
+#    run_tensorboard(logdir=logdir)
+
+
     print("=> starting main loop ...")
     for epoch in range(args.start_epoch, args.epochs):
         print("=> starting training epoch {} ..".format(epoch))
